@@ -3,19 +3,25 @@
  * 命令行交互式地图Agent
  */
 
+import { loadEnv } from './utils/env.js';
 import { MapAgent } from './agent/map-agent.js';
 import type { AgentConfig } from './types/index.js';
 
+// 加载.env文件
+loadEnv();
+
 const CONFIG: AgentConfig = {
   amapKey: process.env.AMAP_KEY || '',
-  timeout: 10000,
+  timeout: parseInt(process.env.AMAP_TIMEOUT || '10000', 10),
 };
 
 async function main() {
   // 检查API Key
   if (!CONFIG.amapKey) {
     console.error('❌ 错误：请设置环境变量 AMAP_KEY');
-    console.error('示例：export AMAP_KEY=your_api_key_here');
+    console.error('\n您可以通过以下方式设置：');
+    console.error('  1. 创建 .env 文件：echo "AMAP_KEY=your_api_key_here" > .env');
+    console.error('  2. 或在命令行设置：export AMAP_KEY=your_api_key_here');
     console.error('\n您可以在高德开放平台申请API Key：https://console.amap.com/dev/key/app');
     process.exit(1);
   }

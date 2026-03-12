@@ -3,7 +3,11 @@
  * 独立启动可观测性Dashboard
  */
 
+import { loadEnv } from './utils/env.js';
 import { MetricsStorage, DashboardServer } from './observability/index.js';
+
+// 加载.env文件
+loadEnv();
 
 async function main() {
   const port = parseInt(process.env.DASHBOARD_PORT || '8080', 10);

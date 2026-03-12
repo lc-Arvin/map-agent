@@ -110,3 +110,6 @@ export function safeGet<T>(obj: unknown, path: string, defaultValue?: T): T | un
 
   return current !== undefined ? (current as T) : defaultValue;
 }
+
+// 环境变量工具
+export { loadEnv, requireEnv, getEnv } from './env.js';
