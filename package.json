@@ -1,0 +1,37 @@
+{
+  "name": "amap-agent",
+  "version": "0.1.0",
+  "description": "基于高德开放平台API的智能地图Agent，支持地理编码、路径规划、POI搜索等能力",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "cli": "node dist/cli.js",
+    "test": "node --test dist/**/*.test.js",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "amap",
+    "map",
+    "agent",
+    "mcp",
+    "geocoding",
+    "routing",
+    "poi"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
