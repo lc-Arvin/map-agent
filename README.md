@@ -132,6 +132,11 @@ amap-agent/
 │   │   └── map-agent.ts       # Agent核心逻辑
 │   ├── client/
 │   │   └── amap-client.ts     # 高德API客户端
+│   ├── observability/         # 可观测性模块
+│   │   ├── collector.ts       # 指标收集器
+│   │   ├── storage.ts         # 指标存储
+│   │   ├── dashboard-server.ts # Dashboard服务
+│   │   └── types.ts           # 指标类型定义
 │   ├── tools/
 │   │   ├── definitions.ts     # MCP工具定义
 │   │   └── executors.ts       # 工具执行器
@@ -141,6 +146,7 @@ amap-agent/
 │   │   ├── index.ts           # 工具函数
 │   │   └── response-generator.ts  # 响应生成器
 │   ├── cli.ts                 # CLI入口
+│   ├── dashboard.ts           # Dashboard启动脚本
 │   └── index.ts               # 主入口
 ├── examples/
 │   ├── basic-usage.ts         # 基本使用示例
@@ -197,11 +203,52 @@ const results = await Promise.all(
 - **Mapbox MCP Server**: MCP协议标准实现
 - **CARTO MCP**: 企业级地理空间工作流
 
-## ⚠️ 限制
+## 📊 可观测性
 
-- 需要高德API Key（免费额度：月15万次基础LBS服务）
-- 坐标转换支持：GPS、百度、图吧 → 高德坐标系
-- 静态地图URL包含API Key，注意权限控制
+本Agent内置完整的可观测性系统，可以监控API调用、Agent执行和性能指标。
+
+### 启动Dashboard
+
+```bash
+# 启动可观测性Dashboard
+npm run dashboard
+
+# 或使用自定义端口
+DASHBOARD_PORT=3000 npm run dashboard
+```
+
+Dashboard服务启动后，访问 http://localhost:8080 查看实时监控数据。
+
+### 监控指标
+
+- **API调用指标**：调用次数、成功率、响应时间、端点分布
+- **Agent执行指标**：查询处理时间、工具使用情况、成功率
+- **工具执行指标**：各工具的执行次数和耗时
+- **性能指标**：内存使用情况
+
+### 使用可观测性API
+
+```typescript
+import { MapAgent, MetricsCollector, MetricsStorage, DashboardServer } from 'amap-agent';
+
+// 创建存储
+const storage = new MetricsStorage({
+  dataDir: './observability-data',
+  maxRetentionDays: 30,
+});
+
+// 启动Dashboard
+const dashboard = new DashboardServer(storage, { port: 8080 });
+await dashboard.start();
+
+// 使用Agent（指标会自动收集）
+const agent = new MapAgent({ amapKey: 'your_key' });
+const response = await agent.query({ query: '搜索附近的餐厅' });
+
+// 获取统计数据
+const stats = storage.getAllStatistics();
+console.log(stats.last24Hours.apiCalls);
+```
 
 ## 📄 许可证
 
