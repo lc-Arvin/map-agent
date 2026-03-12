@@ -17,6 +17,7 @@ import type {
   StaticMapRequest,
   StaticMapResponse,
 } from '../types/index.js';
+import { MetricsCollector } from '../observability/collector.js';
 
 /** API错误 */
 export class AMapAPIError extends Error {
@@ -35,11 +36,13 @@ export class AMapClient implements AMapAPIClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly timeout: number;
+  private readonly metricsCollector: MetricsCollector;
 
   constructor(config: AgentConfig) {
     this.apiKey = config.amapKey;
     this.baseUrl = config.baseUrl || 'https://restapi.amap.com';
     this.timeout = config.timeout || 10000;
+    this.metricsCollector = MetricsCollector.getInstance();
   }
 
   /**
@@ -47,8 +50,12 @@ export class AMapClient implements AMapAPIClient {
    */
   private async request<T>(
     endpoint: string,
-    params: Record<string, string | number | undefined>
+    params: Record<string, string | number | undefined>,
+    apiName: string
   ): Promise<T> {
+    // 创建API调用跟踪器
+    const tracker = this.metricsCollector.createAPITracker(apiName, endpoint, params);
+
     // 过滤undefined参数
     const filteredParams = Object.fromEntries(
       Object.entries(params).filter(([, v]) => v !== undefined)
@@ -74,22 +81,32 @@ export class AMapClient implements AMapAPIClient {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new AMapAPIError(
+        const error = new AMapAPIError(
           `HTTP error: ${response.status}`,
           String(response.status)
         );
+        tracker.error(error, response.status);
+        throw error;
       }
 
       const data = await response.json() as T & { status: string; info: string };
 
       // 检查API返回状态
       if (data.status !== '1') {
-        throw new AMapAPIError(
+        const error = new AMapAPIError(
           `API error: ${data.info}`,
           data.status,
           data
         );
+        tracker.error(error, response.status);
+        throw error;
       }
+
+      // 记录成功
+      tracker.end('success', {
+        httpStatus: response.status,
+        responseCode: data.status,
+      });
 
       return data;
     } catch (error) {
@@ -97,9 +114,11 @@ export class AMapClient implements AMapAPIClient {
       if (error instanceof AMapAPIError) {
         throw error;
       }
-      throw new AMapAPIError(
+      const apiError = new AMapAPIError(
         `Request failed: ${error instanceof Error ? error.message : String(error)}`
       );
+      tracker.error(apiError);
+      throw apiError;
     }
   }
 
@@ -110,7 +129,7 @@ export class AMapClient implements AMapAPIClient {
     return this.request<GeocodeResponse>('/v3/geocode/geo', {
       address: request.address,
       city: request.city,
-    });
+    }, 'geocode');
   }
 
   /**
@@ -124,7 +143,7 @@ export class AMapClient implements AMapAPIClient {
       extensions: request.pois && request.pois > 0 ? 'all' : 'base',
       poitype: request.pois && request.pois > 0 ? '' : undefined,
       radius: request.pois && request.pois > 0 ? 1000 : undefined,
-    });
+    }, 'reverseGeocode');
   }
 
   /**
@@ -137,7 +156,7 @@ export class AMapClient implements AMapAPIClient {
       strategy: request.strategy || 0,
       waypoints: request.waypoints,
       extensions: 'all',
-    });
+    }, 'route.driving');
   }
 
   /**
@@ -154,7 +173,7 @@ export class AMapClient implements AMapAPIClient {
         radius: request.radius || 3000,
         offset: request.offset || 20,
         page: request.page || 1,
-      });
+      }, 'searchPOI.around');
     } else {
       // 关键字搜索
       return this.request<POISearchResponse>('/v3/place/text', {
@@ -163,7 +182,7 @@ export class AMapClient implements AMapAPIClient {
         city: request.city,
         offset: request.offset || 20,
         page: request.page || 1,
-      });
+      }, 'searchPOI.text');
     }
   }
 
@@ -190,7 +209,7 @@ export class AMapClient implements AMapAPIClient {
     return this.request<RouteResponse>('/v3/direction/walking', {
       origin: request.origin,
       destination: request.destination,
-    });
+    }, 'route.walking');
   }
 
   /**
@@ -200,7 +219,7 @@ export class AMapClient implements AMapAPIClient {
     return this.request<RouteResponse>('/v3/direction/riding', {
       origin: request.origin,
       destination: request.destination,
-    });
+    }, 'route.riding');
   }
 
   /**
@@ -214,7 +233,7 @@ export class AMapClient implements AMapAPIClient {
       destination: request.destination,
       city: request.city,
       cityd: request.cityd || request.city,
-    });
+    }, 'route.transit');
   }
 
   /**
@@ -227,7 +246,7 @@ export class AMapClient implements AMapAPIClient {
     return this.request('/v3/assistant/coordinate/convert', {
       locations,
       coordsys,
-    });
+    }, 'convertCoordinates');
   }
 
   /**
@@ -243,6 +262,6 @@ export class AMapClient implements AMapAPIClient {
   }> {
     return this.request('/v3/ip', {
       ip,
-    });
+    }, 'ipLocation');
   }
 }

@@ -14,13 +14,16 @@ import { AMapClient } from '../client/amap-client.js';
 import { allTools } from '../tools/definitions.js';
 import { executeTool, executeToolsParallel } from '../tools/executors.js';
 import { generateResponseText } from '../utils/response-generator.js';
+import { MetricsCollector } from '../observability/collector.js';
 
 /** 地图Agent类 */
 export class MapAgent {
   private apiClient: AMapClient;
+  private metricsCollector: MetricsCollector;
 
   constructor(config: AgentConfig) {
     this.apiClient = new AMapClient(config);
+    this.metricsCollector = MetricsCollector.getInstance();
   }
 
   /**
@@ -36,10 +39,22 @@ export class MapAgent {
   async query(userQuery: AgentQuery): Promise<AgentResponse> {
     const query = userQuery.query.toLowerCase();
 
+    // 开始查询跟踪
+    const queryId = this.metricsCollector.startQuery(userQuery.query);
+    const agentTracker = this.metricsCollector.createAgentTracker(queryId, userQuery.query);
+
     // 1. 分析查询意图，确定需要调用的工具
     const toolCalls = this.analyzeQuery(query, userQuery);
+    agentTracker.markIntentAnalysisComplete();
 
     if (toolCalls.length === 0) {
+      agentTracker.end('success', {
+        intent: 'none',
+        toolsUsed: [],
+        hasMapVisualization: false,
+        resultSummary: 'No tools needed',
+      });
+
       return {
         text: '您好！我是地图助手，可以帮您：\n1. 查询地址对应的坐标（地理编码）\n2. 查询坐标对应的地址（逆地理编码）\n3. 规划路线（驾车、步行、骑行）\n4. 搜索附近的POI（餐厅、酒店等）\n5. 生成静态地图\n\n请告诉我您需要什么帮助？',
         toolsUsed: [],
@@ -47,13 +62,39 @@ export class MapAgent {
     }
 
     // 2. 并行执行工具调用
-    const results = await executeToolsParallel(toolCalls, this.apiClient);
+    const toolsUsed = toolCalls.map(call => call.name);
+    const toolTrackers = toolCalls.map(call =>
+      this.metricsCollector.createToolTracker(call.name, queryId, call.arguments)
+    );
+
+    let results: MCPToolResult[];
+    try {
+      results = await executeToolsParallel(toolCalls, this.apiClient);
+
+      // 记录工具执行结果
+      results.forEach((result, index) => {
+        toolTrackers[index].end(result.success ? 'success' : 'error', result.error);
+      });
+    } catch (error) {
+      // 记录工具执行失败
+      toolTrackers.forEach(tracker => tracker.end('error', 'Tool execution failed'));
+      agentTracker.markToolExecutionComplete();
+      agentTracker.end('error', {
+        intent: toolCalls.map(c => c.name).join(','),
+        toolsUsed,
+        hasMapVisualization: false,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+
+    agentTracker.markToolExecutionComplete();
 
     // 3. 生成响应文本
     const responseText = generateResponseText(query, toolCalls, results);
+    agentTracker.markResponseGenerationStart();
 
     // 4. 构建响应数据
-    const toolsUsed = toolCalls.map(call => call.name);
     const successfulResults = results.filter(r => r.success);
 
     // 5. 构建地图可视化（如果有位置数据）
@@ -61,6 +102,22 @@ export class MapAgent {
     if (this.shouldGenerateMap(query, toolCalls, results)) {
       mapVisualization = await this.generateMapVisualization(results);
     }
+
+    // 确定执行状态
+    let status: 'success' | 'error' | 'partial' = 'success';
+    if (successfulResults.length === 0) {
+      status = 'error';
+    } else if (successfulResults.length < results.length) {
+      status = 'partial';
+    }
+
+    // 记录Agent执行完成
+    agentTracker.end(status, {
+      intent: toolCalls.map(c => c.name).join(','),
+      toolsUsed,
+      hasMapVisualization: !!mapVisualization,
+      resultSummary: responseText.slice(0, 100),
+    });
 
     return {
       text: responseText,

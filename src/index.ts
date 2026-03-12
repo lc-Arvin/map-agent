@@ -47,3 +47,17 @@ export {
 
 // 响应生成器
 export { generateResponseText } from './utils/response-generator.js';
+
+// 可观测性
+export {
+  MetricsCollector,
+  MetricsStorage,
+  DashboardServer,
+} from './observability/index.js';
+export type {
+  APICallMetric,
+  AgentExecutionMetric,
+  ToolExecutionMetric,
+  PerformanceMetric,
+  Statistics,
+} from './observability/index.js';
