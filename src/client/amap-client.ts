@@ -89,7 +89,9 @@ export class AMapClient implements AMapAPIClient {
         throw error;
       }
 
-      const data = await response.json() as T & { status: string; info: string };
+      const responseText = await response.text();
+      const responseSize = Buffer.byteLength(responseText, 'utf8');
+      const data = JSON.parse(responseText) as T & { status: string; info: string };
 
       // 检查API返回状态
       if (data.status !== '1') {
@@ -102,11 +104,20 @@ export class AMapClient implements AMapAPIClient {
         throw error;
       }
 
+      // 计算结果数量（根据API类型）
+      const resultCount = this.extractResultCount(data, apiName);
+
       // 记录成功
       tracker.end('success', {
         httpStatus: response.status,
         responseCode: data.status,
+        responseSize,
       });
+
+      // 调试日志（可在需要时开启）
+      if (process.env.DEBUG_AMAP) {
+        console.log(`[API ${apiName}] 结果数: ${resultCount}, 响应大小: ${responseSize} bytes`);
+      }
 
       return data;
     } catch (error) {
@@ -119,6 +130,29 @@ export class AMapClient implements AMapAPIClient {
       );
       tracker.error(apiError);
       throw apiError;
+    }
+  }
+
+  /**
+   * 从响应数据中提取结果数量
+   */
+  private extractResultCount(data: unknown, apiName: string): number | undefined {
+    const d = data as Record<string, unknown>;
+    
+    switch (apiName) {
+      case 'geocode':
+        return Array.isArray(d.geocodes) ? d.geocodes.length : undefined;
+      case 'searchPOI.text':
+      case 'searchPOI.around':
+        return Array.isArray(d.pois) ? d.pois.length : undefined;
+      case 'route.driving':
+      case 'route.walking':
+      case 'route.riding':
+        return d.route && Array.isArray((d.route as Record<string, unknown>).paths) 
+          ? ((d.route as Record<string, unknown>).paths as unknown[]).length 
+          : undefined;
+      default:
+        return undefined;
     }
   }
 

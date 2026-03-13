@@ -50,7 +50,14 @@ export class DashboardServer {
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((req, res) => {
-        this.handleRequest(req, res);
+        // 处理异步请求处理器
+        this.handleRequest(req, res).catch((error) => {
+          console.error('Unhandled error in request handler:', error);
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end(JSON.stringify({ error: 'Internal server error' }));
+          }
+        });
       });
 
       this.server.listen(this.config.port, this.config.host, () => {
@@ -97,7 +104,7 @@ export class DashboardServer {
   /**
    * 处理HTTP请求
    */
-  private handleRequest(req: IncomingMessage, res: ServerResponse): void {
+  private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = req.url || '/';
     const method = req.method || 'GET';
 
@@ -113,28 +120,42 @@ export class DashboardServer {
     }
 
     // 路由处理
-    if (url === '/' || url === '/dashboard') {
-      this.serveDashboard(res);
-    } else if (url === '/api/metrics/realtime') {
-      this.serveRealtimeMetrics(res);
-    } else if (url === '/api/metrics/statistics') {
-      this.serveStatistics(res);
-    } else if (url === '/api/metrics/api-calls') {
-      this.serveAPICalls(res);
-    } else if (url === '/api/metrics/agent-executions') {
-      this.serveAgentExecutions(res);
-    } else if (url === '/api/metrics/tool-executions') {
-      this.serveToolExecutions(res);
-    } else if (url.startsWith('/api/metrics/query/')) {
-      const queryId = url.split('/').pop();
-      if (queryId) {
-        this.serveQueryDetails(res, queryId);
+    try {
+      if (url === '/' || url === '/dashboard') {
+        this.serveDashboard(res);
+      } else if (url === '/api/metrics/realtime') {
+        await this.serveRealtimeMetrics(res);
+      } else if (url === '/api/metrics/statistics') {
+        await this.serveStatistics(res);
+      } else if (url === '/api/metrics/api-calls') {
+        await this.serveAPICalls(res);
+      } else if (url === '/api/metrics/agent-executions') {
+        await this.serveAgentExecutions(res);
+      } else if (url === '/api/metrics/tool-executions') {
+        await this.serveToolExecutions(res);
+      } else if (url.startsWith('/api/metrics/query/')) {
+        const queryId = url.split('/').pop();
+        if (queryId) {
+          await this.serveQueryDetails(res, queryId);
+        } else {
+          this.serve404(res);
+        }
       } else {
         this.serve404(res);
       }
-    } else {
-      this.serve404(res);
+    } catch (error) {
+      console.error('Error handling request:', error);
+      this.serveError(res, error instanceof Error ? error.message : 'Internal server error');
     }
+  }
+
+  /**
+   * 服务错误响应
+   */
+  private serveError(res: ServerResponse, message: string): void {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.writeHead(500);
+    res.end(JSON.stringify({ error: message }));
   }
 
   /**
@@ -150,7 +171,10 @@ export class DashboardServer {
   /**
    * 服务实时指标
    */
-  private serveRealtimeMetrics(res: ServerResponse): void {
+  private async serveRealtimeMetrics(res: ServerResponse): Promise<void> {
+    // 重新加载数据以获取其他进程写入的最新数据
+    await this.storage.reloadFromDisk();
+    
     const data = {
       recentAPICalls: this.storage.getRecentAPICalls(50),
       recentAgentExecutions: this.storage.getRecentAgentExecutions(50),
@@ -164,7 +188,8 @@ export class DashboardServer {
   /**
    * 服务统计数据
    */
-  private serveStatistics(res: ServerResponse): void {
+  private async serveStatistics(res: ServerResponse): Promise<void> {
+    await this.storage.reloadFromDisk();
     const data = this.storage.getAllStatistics();
     this.serveJSON(res, data);
   }
@@ -172,7 +197,8 @@ export class DashboardServer {
   /**
    * 服务API调用记录
    */
-  private serveAPICalls(res: ServerResponse): void {
+  private async serveAPICalls(res: ServerResponse): Promise<void> {
+    await this.storage.reloadFromDisk();
     const data = this.storage.getRecentAPICalls(100);
     this.serveJSON(res, data);
   }
@@ -180,7 +206,8 @@ export class DashboardServer {
   /**
    * 服务Agent执行记录
    */
-  private serveAgentExecutions(res: ServerResponse): void {
+  private async serveAgentExecutions(res: ServerResponse): Promise<void> {
+    await this.storage.reloadFromDisk();
     const data = this.storage.getRecentAgentExecutions(100);
     this.serveJSON(res, data);
   }
@@ -188,7 +215,8 @@ export class DashboardServer {
   /**
    * 服务工具执行记录
    */
-  private serveToolExecutions(res: ServerResponse): void {
+  private async serveToolExecutions(res: ServerResponse): Promise<void> {
+    await this.storage.reloadFromDisk();
     const data = this.storage.getRecentToolExecutions(100);
     this.serveJSON(res, data);
   }
@@ -196,7 +224,8 @@ export class DashboardServer {
   /**
    * 服务查询详情
    */
-  private serveQueryDetails(res: ServerResponse, queryId: string): void {
+  private async serveQueryDetails(res: ServerResponse, queryId: string): Promise<void> {
+    await this.storage.reloadFromDisk();
     const agentExecutions = this.storage.getRecentAgentExecutions(1000);
     const toolExecutions = this.storage.getRecentToolExecutions(1000);
     const apiCalls = this.storage.getRecentAPICalls(1000);
@@ -481,12 +510,14 @@ export class DashboardServer {
             <th>时间</th>
             <th>API</th>
             <th>端点</th>
+            <th>参数</th>
             <th>状态</th>
             <th>耗时</th>
+            <th>响应大小</th>
           </tr>
         </thead>
         <tbody id="api-calls-table">
-          <tr><td colspan="5" style="text-align:center;color:#888;">加载中...</td></tr>
+          <tr><td colspan="7" style="text-align:center;color:#888;">加载中...</td></tr>
         </tbody>
       </table>
     </div>
@@ -649,19 +680,42 @@ export class DashboardServer {
     function updateAPICalls(calls) {
       const tbody = document.getElementById('api-calls-table');
       if (calls.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#888;">暂无数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#888;">暂无数据</td></tr>';
         return;
       }
 
-      tbody.innerHTML = calls.map(c => \`
-        <tr>
-          <td class="timestamp">\${formatTime(c.timestamp)}</td>
-          <td>\${c.apiName}</td>
-          <td><span class="endpoint">\${c.endpoint}</span></td>
-          <td>\${getStatusBadge(c.status)}</td>
-          <td class="duration">\${formatDuration(c.duration)}</td>
-        </tr>
-      \`).join('');
+      tbody.innerHTML = calls.map(c => {
+        // 格式化参数显示
+        const paramsStr = c.params ? Object.entries(c.params)
+          .filter(([k]) => k !== 'key') // 过滤API Key
+          .map(([k, v]) => k + '=' + v)
+          .join(', ') : '-';
+        
+        // 格式化响应大小
+        const sizeStr = c.responseSize ? formatBytes(c.responseSize) : '-';
+        
+        const truncatedParams = paramsStr.length > 40 ? paramsStr.slice(0, 40) + '...' : paramsStr;
+        
+        return '\
+        <tr>\
+          <td class="timestamp">' + formatTime(c.timestamp) + '</td>\
+          <td>' + c.apiName + '</td>\
+          <td><span class="endpoint">' + c.endpoint + '</span></td>\
+          <td class="params" title="' + paramsStr + '">' + truncatedParams + '</td>\
+          <td>' + getStatusBadge(c.status) + '</td>\
+          <td class="duration">' + formatDuration(c.duration) + '</td>\
+          <td>' + sizeStr + '</td>\
+        </tr>';
+      }).join('');
+    }
+
+    // 格式化字节大小
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
     // 更新工具执行表格

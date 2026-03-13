@@ -5,7 +5,10 @@
 
 import { loadEnv } from './utils/env.js';
 import { MapAgent } from './agent/map-agent.js';
+import { MetricsCollector } from './observability/collector.js';
+import { MetricsStorage } from './observability/storage.js';
 import type { AgentConfig } from './types/index.js';
+import type { APICallMetric, AgentExecutionMetric, ToolExecutionMetric } from './observability/types.js';
 
 // 加载.env文件
 loadEnv();
@@ -14,6 +17,52 @@ const CONFIG: AgentConfig = {
   amapKey: process.env.AMAP_KEY || '',
   timeout: parseInt(process.env.AMAP_TIMEOUT || '10000', 10),
 };
+
+// 初始化可观测性存储
+let storage: MetricsStorage | null = null;
+let unsubscribeMetrics: (() => void) | null = null;
+
+const OBSERVABILITY_DATA_DIR = process.env.OBSERVABILITY_DATA_DIR || './observability-data';
+
+async function initObservability(): Promise<void> {
+  // 创建存储实例
+  storage = new MetricsStorage({
+    dataDir: OBSERVABILITY_DATA_DIR,
+    maxRetentionDays: parseInt(process.env.OBSERVABILITY_RETENTION_DAYS || '30', 10),
+    autoSaveInterval: parseInt(process.env.OBSERVABILITY_SAVE_INTERVAL || '60000', 10),
+  });
+
+  // 等待存储初始化完成（加载历史数据）
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  // 注册指标监听器，将指标保存到存储
+  const collector = MetricsCollector.getInstance();
+  unsubscribeMetrics = collector.onMetric((metric) => {
+    if ('apiName' in metric) {
+      storage?.storeAPICall(metric as APICallMetric);
+    } else if ('query' in metric) {
+      storage?.storeAgentExecution(metric as AgentExecutionMetric);
+    } else if ('toolName' in metric) {
+      storage?.storeToolExecution(metric as ToolExecutionMetric);
+    } else {
+      storage?.storePerformance(metric);
+    }
+  });
+
+  console.log('📊 可观测性系统已启动，数据将保存到:', OBSERVABILITY_DATA_DIR);
+}
+
+async function shutdownObservability(): Promise<void> {
+  if (unsubscribeMetrics) {
+    unsubscribeMetrics();
+    unsubscribeMetrics = null;
+  }
+  if (storage) {
+    await storage.flush();
+    storage.stopAutoSave();
+    console.log('📊 可观测性数据已保存');
+  }
+}
 
 async function main() {
   // 检查API Key
@@ -25,6 +74,22 @@ async function main() {
     console.error('\n您可以在高德开放平台申请API Key：https://console.amap.com/dev/key/app');
     process.exit(1);
   }
+
+  // 初始化可观测性
+  await initObservability();
+
+  // 注册优雅关闭处理
+  process.on('SIGINT', async () => {
+    console.log('\n\n接收到中断信号，正在保存数据...');
+    await shutdownObservability();
+    process.exit(0);
+  });
+
+  process.on('SIGTERM', async () => {
+    console.log('\n\n接收到终止信号，正在保存数据...');
+    await shutdownObservability();
+    process.exit(0);
+  });
 
   const agent = new MapAgent(CONFIG);
 
@@ -55,6 +120,7 @@ async function main() {
       }
     } catch (error) {
       console.error('❌ 查询失败：', error instanceof Error ? error.message : String(error));
+      await shutdownObservability();
       process.exit(1);
     }
   } else {
@@ -104,6 +170,13 @@ async function main() {
       }
     }
   }
+
+  // 关闭时保存可观测性数据
+  await shutdownObservability();
 }
 
-main().catch(console.error);
+main().catch(async (error) => {
+  console.error(error);
+  await shutdownObservability();
+  process.exit(1);
+});

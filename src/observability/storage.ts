@@ -124,6 +124,13 @@ export class MetricsStorage {
   }
 
   /**
+   * 重新从磁盘加载数据（用于多进程场景）
+   */
+  async reloadFromDisk(): Promise<void> {
+    await this.loadFromDisk();
+  }
+
+  /**
    * 加载单个文件
    */
   private async loadFile<T>(path: string): Promise<T | null> {
